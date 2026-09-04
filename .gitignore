@@ -1,0 +1,8 @@
+.venv/
+runs/
+data/*.mp4
+data/*.avi
+data/*.npz
+*.pt
+__pycache__/
+*.sh
