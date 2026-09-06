@@ -6,7 +6,7 @@ import numpy as np
 import cv2
 from ultralytics import YOLO
 
-VIDEO_PATH = "data/test_crosswalk.mp4"
+VIDEO_PATH = "data/test_clip2.mp4"
 OUTPUT_NPZ = "data/track_features.npz"
 CROP_SIZE = 112
 MAX_FRAMES_PER_TRACK = 32
@@ -18,7 +18,10 @@ cap = cv2.VideoCapture(VIDEO_PATH)
 tracks = {}
 frame_idx = 0
 
-det_gen = yolo.track(source=VIDEO_PATH, classes=[0], persist=True, device="cpu", stream=True, verbose=False)
+det_gen = yolo.track(
+    source=VIDEO_PATH, classes=[0], persist=True, device=0,
+    stream=True, conf=0.15, tracker="my_bytetrack.yaml", verbose=False
+)
 
 for det_r in det_gen:
     ret, frame = cap.read()
@@ -26,7 +29,7 @@ for det_r in det_gen:
         break
 
     if det_r.boxes is not None and det_r.boxes.id is not None:
-        pose_r = pose_model.predict(frame, device="cpu", verbose=False)[0]
+        pose_r = pose_model.predict(frame, device=0, verbose=False)[0]
 
         for i, track_id in enumerate(det_r.boxes.id.tolist()):
             box = det_r.boxes.xyxy[i].tolist()

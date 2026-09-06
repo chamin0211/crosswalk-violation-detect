@@ -6,3 +6,13 @@ data/*.npz
 *.pt
 __pycache__/
 *.sh
+
+# 영상 파일 (용량 문제로 저장소에 포함하지 않음)
+data/raw/
+data/*.mp4
+*.mp4
+data/snapshots/
+runs/
+
+# PCPA 잔재
+pcpa_result_*.json

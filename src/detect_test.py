@@ -8,7 +8,7 @@ from ultralytics import YOLO
 
 MODEL_NAME = "yolo11n.pt"    # CPU용 경량 모델로 변경
 # MODEL_NAME = "yolo11s.pt"          # GPU(RTX 4060)니까 s 모델로
-VIDEO_PATH = "data/test_crosswalk.mp4"   # 테스트 영상 경로
+VIDEO_PATH = "data/test_clip2.mp4"   # 테스트 영상 경로
 OUTPUT_DIR = "runs/detect"
 
 model = YOLO(MODEL_NAME)
@@ -19,7 +19,7 @@ TARGET_CLASSES = [0, 2, 3, 5, 7]
 results = model.predict(
     source=VIDEO_PATH,
     classes=TARGET_CLASSES,
-    conf=0.4,
+    conf=0.15,
     device="cpu",             # device=0 대신 이렇게
     # device=0,          # GPU 사용
     save=True,
