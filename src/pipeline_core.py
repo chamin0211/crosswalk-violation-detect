@@ -399,6 +399,7 @@ def run_pipeline(video_path, crosswalk_points,
 
     yolo = YOLO("yolo11m.pt")
     pose_model = YOLO("yolo11m-pose.pt")
+    moto_model = YOLO("best_moto.pt")
     cap = cv2.VideoCapture(video_path)
 
 
@@ -423,7 +424,11 @@ def run_pipeline(video_path, crosswalk_points,
             device=0, conf=conf, tracker="my_bytetrack.yaml", verbose=False,
             imgsz=1920
         )[0]
-
+        moto_r = moto_model.track(
+            frame, persist=True,
+            device=0, conf=0.25, tracker="my_bytetrack.yaml", verbose=False,
+            imgsz=1920
+        )[0]
         frame_detections[frame_idx] = []
 
         if det_r.boxes is not None and det_r.boxes.id is not None:
@@ -462,10 +467,29 @@ def run_pipeline(video_path, crosswalk_points,
                     vehicle_tracks.setdefault(track_id, []).append({
                         "frame": frame_idx, "cx": cx, "cy": cy,
                         "ax": ax, "ay": ay, "diag": diag,
-                        "overlap": overlap, "box": box,
+                        "overlap": overlap, "box": box, "cls_id": cls_id,
                     })
 
+        # 오토바이 전용 모델 검출 병합 (yolo11m은 오토바이 신뢰도가 낮아 잘 못 잡음)
+        # track_id에 큰 오프셋을 더해 기존 yolo11m의 ID와 절대 충돌하지 않게 한다.
+        if moto_r.boxes is not None and moto_r.boxes.id is not None:
+            for i, moto_track_id in enumerate(moto_r.boxes.id.tolist()):
+                moto_box = moto_r.boxes.xyxy[i].tolist()
+                mx1, my1, mx2, my2 = moto_box
+                mcx, mcy = (mx1 + mx2) / 2, (my1 + my2) / 2
+                mid = int(moto_track_id) + 100000
+                frame_detections[frame_idx].append({"track_id": mid, "cls_id": 3, "box": moto_box})
+                mox, moy = (mx1 + mx2) / 2, my2
+                mdiag = ((mx2 - mx1) ** 2 + (my2 - my1) ** 2) ** 0.5
+                moverlap = _box_polygon_overlap_ratio(moto_box, polygon)
+                vehicle_tracks.setdefault(mid, []).append({
+                    "frame": frame_idx, "cx": mcx, "cy": mcy,
+                    "ax": mox, "ay": moy, "diag": mdiag,
+                    "overlap": moverlap, "box": moto_box, "cls_id": 3,
+                })
+
         frame_idx += 1
+
 
     cap.release()
 
@@ -554,6 +578,7 @@ def run_pipeline(video_path, crosswalk_points,
 
         vehicle_results.append({
             "track_id": vid,
+            "cls_id": in_zone_points[0]["cls_id"],
             "frame_range": [in_zone_points[0]["frame"], in_zone_points[-1]["frame"]],
             "frames_in_zone": len(in_zone_points),
             "zone_frames": zone_frames,
@@ -568,8 +593,99 @@ def run_pipeline(video_path, crosswalk_points,
         "crosswalk_points": crosswalk_points,
     }
 
+def _merge_violation_events(events, fps, gap_seconds=2.0):
+    """시간이 가깝고 person_track_ids가 겹치는 이벤트를 하나로 병합.
 
-def determine_violation(result):
+    같은 차량/오토바이가 검출 신뢰도 요동으로 트랙 ID가 여러 번 바뀌어도
+    "같은 보행자를 대상으로 한 하나의 사건"으로 재구성하기 위함.
+    person_track_ids가 겹치지 않으면(= 다른 보행자를 대상으로 한 별개 사건)
+    시간이 겹쳐도 병합하지 않는다.
+    """
+    if len(events) <= 1:
+        for ev in events:
+            ev.pop("_frames", None)
+        return events
+
+    gap_frames = gap_seconds * fps
+    n = len(events)
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[ry] = rx
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            start_i, end_i = events[i]["frame_range"]
+            start_j, end_j = events[j]["frame_range"]
+            if end_i < start_j:
+                gap = start_j - end_i
+            elif end_j < start_i:
+                gap = start_i - end_j
+            else:
+                gap = 0
+            if gap > gap_frames:
+                continue
+            same_person = set(events[i]["person_track_ids"]) & set(events[j]["person_track_ids"])
+            same_class = events[i]["vehicle_cls_ids"] & events[j]["vehicle_cls_ids"]
+            if same_person and same_class:
+                union(i, j)
+
+    groups = {}
+    for i in range(n):
+        root = find(i)
+        groups.setdefault(root, []).append(events[i])
+
+    severity_rank = {"high": 3, "medium": 2, "review_needed": 1}
+    merged = []
+    for group in groups.values():
+        if len(group) == 1:
+            ev = dict(group[0])
+            ev.pop("_frames", None)
+            ev["vehicle_cls_ids"] = sorted(ev["vehicle_cls_ids"])
+            merged.append(ev)
+            continue
+
+        all_frames = set()
+        person_states = set()
+        person_track_ids = set()
+        vehicle_track_ids = set()
+        vehicle_cls_ids = set()
+        vehicle_motion_states = set()
+        best_severity = "review_needed"
+
+        for ev in group:
+            all_frames |= set(ev["_frames"])
+            person_states |= set(ev["person_states"])
+            person_track_ids |= set(ev["person_track_ids"])
+            vehicle_track_ids |= set(ev["vehicle_track_ids"])
+            vehicle_cls_ids |= set(ev["vehicle_cls_ids"])
+            vehicle_motion_states |= set(ev["vehicle_motion_states"])
+            if severity_rank[ev["severity"]] > severity_rank[best_severity]:
+                best_severity = ev["severity"]
+
+        merged.append({
+            "frame_range": [min(all_frames), max(all_frames)],
+            "frame_count": len(all_frames),
+            "person_states": sorted(person_states),
+            "person_track_ids": sorted(person_track_ids),
+            "vehicle_track_ids": sorted(vehicle_track_ids),
+            "vehicle_cls_ids": sorted(vehicle_cls_ids),
+            "vehicle_motion_states": sorted(vehicle_motion_states),
+            "severity": best_severity,
+        })
+
+    merged.sort(key=lambda e: e["frame_range"][0])
+    return merged
+
+def determine_violation(result, fps):
     """프레임 단위로 위반 여부를 판정.
 
     특정 보행자와 특정 차량을 짝지어 비교하지 않는다.
@@ -596,7 +712,9 @@ def determine_violation(result):
 
     # 2) 프레임별 차량 상태 집계 (정지하지 않은 차만)
     veh_frames = {}          # frame -> list of (track_id, motion_state)
+    veh_cls = {}             # track_id -> cls_id (병합 시 차종 구분용)
     for v in result["vehicles"]:
+        veh_cls[v["track_id"]] = v.get("cls_id")
         motion_state = v.get("motion_state", "moving")
         if motion_state == "stopped":
             continue          # 완전 정지 = 의무 이행
@@ -645,11 +763,14 @@ def determine_violation(result):
             "person_states": sorted(states),
             "person_track_ids": sorted(pids),
             "vehicle_track_ids": [vid],
+            "vehicle_cls_ids": {veh_cls.get(vid)},
             "vehicle_motion_states": sorted(motions),
             "severity": severity,
+            "_frames": frames,   # 병합용 임시 필드, 최종 반환 전 제거됨
         })
 
     events.sort(key=lambda e: e["frame_range"][0])
+    events = _merge_violation_events(events, fps)
 
     return True, violation_frames, events
 
@@ -763,7 +884,7 @@ def render_annotated_video(video_path, result, is_violation, output_path="data/a
     polygon = np.array(result["crosswalk_points"], dtype=np.int32)
     frame_detections = result["frame_detections"]
 
-    _, violation_frames, _ = determine_violation(result)
+    _, violation_frames, _ = determine_violation(result, fps)
 
     cap = cv2.VideoCapture(video_path)
     frame_idx = 0

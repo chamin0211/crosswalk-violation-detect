@@ -1,14 +1,10 @@
 import csv
 import io
 
-import csv
-import io
-
 import cv2
 import streamlit as st
 from streamlit_image_coordinates import streamlit_image_coordinates
 from PIL import Image, ImageDraw
-
 from src.pipeline_core import (get_first_frame, run_pipeline, render_annotated_video,
                                reencode_for_browser, determine_violation, get_video_info,
                                capture_violation_snapshots, _order_polygon_points)
@@ -101,13 +97,43 @@ if "page" not in st.session_state:
 # 1. 업로드 + 횡단보도 지정
 # ============================================================
 if st.session_state.page == "upload":
-    st.title("비신호 횡단보도 보행자 보호의무 위반 감지")
-    st.caption("본 결과는 참고용이며, 최종 판단은 담당자가 합니다.")
+    st.markdown("""
+    <div style="text-align: center; padding: 24px 0 8px 0;">
+        <h1 style="margin-bottom: 4px;">🚦 비신호 횡단보도 위반 감지</h1>
+        <p style="color: #64748B; font-size: 15px;">
+            영상 속 보행자 보호의무 위반 후보를 자동으로 찾아드립니다
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    uploaded_file = st.file_uploader(
-        "영상 업로드", type=["mp4", "mov", "avi"],
-        help="한 번에 하나의 영상만 분석합니다."
-    )
+    st.markdown("""
+    <div style="display: flex; justify-content: center; gap: 32px;
+                padding: 20px 0 32px 0;">
+        <div style="text-align: center; flex: 1; max-width: 200px;">
+            <div style="font-size: 28px;">📹</div>
+            <div style="font-weight: 600; margin-top: 4px;">1. 영상 업로드</div>
+            <div style="color: #64748B; font-size: 13px;">분석할 영상을 올려주세요</div>
+        </div>
+        <div style="text-align: center; flex: 1; max-width: 200px;">
+            <div style="font-size: 28px;">📍</div>
+            <div style="font-weight: 600; margin-top: 4px;">2. 횡단보도 지정</div>
+            <div style="color: #64748B; font-size: 13px;">네 모서리를 클릭하세요</div>
+        </div>
+        <div style="text-align: center; flex: 1; max-width: 200px;">
+            <div style="font-size: 28px;">🔍</div>
+            <div style="font-weight: 600; margin-top: 4px;">3. 자동 분석</div>
+            <div style="color: #64748B; font-size: 13px;">위반 후보를 찾아드립니다</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    _, upload_col, _ = st.columns([1, 3, 1])
+    with upload_col:
+        with st.container(border=True):
+            uploaded_file = st.file_uploader(
+                "영상 업로드", type=["mp4", "mov", "avi"],
+                help="한 번에 하나의 영상만 분석합니다."
+            )
 
     has_video = False
     if uploaded_file is not None:
@@ -194,10 +220,17 @@ if st.session_state.page == "upload":
 # 2. 분석 진행
 # ============================================================
 elif st.session_state.page == "analyzing":
-    st.title("분석 중")
-    st.caption("영상 길이와 등장 인원에 따라 수 분이 걸릴 수 있습니다.")
+    st.markdown("""
+    <div style="text-align: center; padding: 80px 0 32px 0;">
+        <div style="font-size: 48px;">🔍</div>
+        <h2 style="margin-top: 8px;">영상을 분석하고 있습니다</h2>
+        <p style="color: #64748B;">영상 길이와 등장 인원에 따라 수 분이 걸릴 수 있습니다</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    prog = st.progress(0, text="영상 준비 중...")
+    _, center_col, _ = st.columns([1, 2, 1])
+    with center_col:
+        prog = st.progress(0, text="영상 준비 중...")
 
     prog.progress(10, text="사람과 차량을 추적하는 중...")
     result = run_pipeline(VIDEO_PATH, st.session_state.points)
@@ -211,12 +244,12 @@ elif st.session_state.page == "analyzing":
         st.stop()
 
     prog.progress(85, text="위반 여부를 판정하는 중...")
-    is_violation, violation_frames, violation_events = determine_violation(result)
-
     fps = get_video_info(VIDEO_PATH)["fps"]
+    is_violation, violation_frames, violation_events = determine_violation(result, fps)
+
     for ev in violation_events:
-        s, e = ev["frame_range"]
-        ev["시각(초)"] = [round(s / fps, 1), round(e / fps, 1)]
+         s, e = ev["frame_range"]
+         ev["시각(초)"] = [round(s / fps, 1), round(e / fps, 1)]
 
     st.session_state.analysis = {
         "result": result,
@@ -286,7 +319,9 @@ elif st.session_state.page == "result" and "analysis" in st.session_state:
                     horizontal=True, label_visibility="collapsed",
                     key=f"snapkind_{idx}",
                 )
-                st.image(snaps[kind], use_container_width=True)
+                _, img_col, _ = st.columns([1, 4, 1])
+                with img_col:
+                    st.image(snaps[kind], use_container_width=True)
             elif snaps:
                 st.image(list(snaps.values())[0], use_container_width=True)
             elif ev.get("snapshot_path"):
@@ -330,7 +365,7 @@ elif st.session_state.page == "result" and "analysis" in st.session_state:
                     file_name="violations.csv",
                     mime="text/csv",
                 )
-                
+
         with tab2:
             rows = []
             for v in a["result"]["vehicles"]:

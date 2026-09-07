@@ -16,3 +16,4 @@ runs/
 
 # PCPA 잔재
 pcpa_result_*.json
+!best_moto.pt
