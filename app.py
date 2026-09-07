@@ -1,3 +1,9 @@
+import csv
+import io
+
+import csv
+import io
+
 import cv2
 import streamlit as st
 from streamlit_image_coordinates import streamlit_image_coordinates
@@ -46,6 +52,37 @@ def build_event_summary(ev):
         f"도로교통법 제27조에 따른 일시정지 의무 위반 후보로 판단됩니다."
     )
 
+
+def build_violations_csv(events, vehicles, fps):
+    """위반 이벤트를 검토자가 엑셀로 열 수 있는 CSV 문자열로 변환."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "위반번호", "발생시각(초)", "종료시각(초)", "지속시간(초)",
+        "보행자상태", "차량상태", "최대정지시간(초)", "횡단보도침범비율",
+        "판정등급", "진입스냅샷", "통과스냅샷", "추적번호(참고용)",
+    ])
+    for i, ev in enumerate(events, 1):
+        vids = ev["vehicle_track_ids"]
+        matched = [v for v in vehicles if v["track_id"] in vids]
+        max_stop = next((v.get("max_stop_duration_sec", 0) for v in matched), 0)
+        overlap = next((v.get("max_overlap", 0) for v in matched), 0)
+        snaps = ev.get("snapshots", {})
+        writer.writerow([
+            i,
+            ev["시각(초)"][0],
+            ev["시각(초)"][1],
+            round(ev["frame_count"] / fps, 1),
+            " / ".join(STATE_LABEL.get(x, x) for x in ev["person_states"]),
+            " / ".join(MOTION_LABEL.get(m, m) for m in ev["vehicle_motion_states"]),
+            max_stop,
+            f"{min(overlap, 1.0) * 100:.0f}%",
+            SEVERITY_LABEL.get(ev["severity"], ev["severity"]),
+            snaps.get("enter", ev.get("snapshot_path", "")),
+            snaps.get("pass", ""),
+            ", ".join(str(v) for v in vids),
+        ])
+    return output.getvalue()
 
 def reset_to_upload():
     for k in ["analysis", "final_video"]:
@@ -284,6 +321,16 @@ elif st.session_state.page == "result" and "analysis" in st.session_state:
                     ],
                 }, hide_index=True, use_container_width=True)
 
+
+            if events:
+                csv_data = build_violations_csv(events, a["result"]["vehicles"], fps)
+                st.download_button(
+                    "위반 이벤트 CSV 다운로드",
+                    data=csv_data.encode("utf-8-sig"),
+                    file_name="violations.csv",
+                    mime="text/csv",
+                )
+                
         with tab2:
             rows = []
             for v in a["result"]["vehicles"]:
